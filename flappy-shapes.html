@@ -1,0 +1,481 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=480, initial-scale=1" />
+<title>Flappy Shapes — Colored Pipes Final</title>
+<style>
+  :root{
+    --easy:#2ecc71;
+    --medium:#f1c40f;
+    --hard:#e67e22;
+    --extreme:#e74c3c;
+  }
+  *{box-sizing:border-box}
+  html,body{
+    margin:0;height:100%;overflow:hidden;
+    font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;
+    background:var(--easy); /* canvas is transparent */
+    transition:background 200ms ease;
+    color:#111;
+    -webkit-user-select:none;user-select:none;
+  }
+  #stage{position:relative;width:480px;height:640px;margin:0 auto}
+  canvas#game{width:480px;height:640px;display:block;background:transparent}
+
+  /* Left menus */
+  #menu{
+    position:absolute;top:10px;left:10px;display:flex;flex-direction:column;gap:14px;z-index:5
+  }
+  .group{display:flex;flex-direction:column;gap:8px}
+  .title{font-weight:900;color:#111;text-shadow:0 1px 0 rgba(255,255,255,.8)}
+  .btn{padding:8px 12px;border:3px solid #111;border-radius:10px;background:#fff;color:#111;cursor:pointer;font-weight:800}
+  .btn.small{padding:6px 10px}
+  .btn.active{outline:4px solid #111;background:#ececec}
+  #start{position:absolute;bottom:14px;left:50%;transform:translateX(-50%);}
+
+  /* HUD */
+  #hud{position:absolute;top:8px;right:8px;z-index:4;font-weight:900;text-shadow:0 1px 0 rgba(255,255,255,.7)}
+
+  /* Overlays */
+  #countOverlay{position:absolute;inset:0;display:none;align-items:center;justify-content:center;z-index:6;
+                background:rgba(0,0,0,.35);color:#fff;font-weight:900;font-size:72px}
+  #countOverlay.show{display:flex}
+
+  #gameOver{
+    position:absolute;inset:0;display:none;align-items:center;justify-content:center;z-index:7;
+    background:rgba(0,0,0,.45);color:#fff;text-align:center
+  }
+  #gameOver .panel{
+    background:#111;padding:20px 24px;border-radius:14px;min-width:260px;
+    box-shadow:0 10px 30px rgba(0,0,0,.35)
+  }
+  #gameOver h1{margin:0 0 8px 0;font-size:28px}
+  #gameOver .scores{margin:6px 0 14px 0;font-weight:800}
+  #gameOver .row{display:flex;gap:10px;justify-content:center}
+  #gameOver .btn{background:#fff;color:#111;border-color:#fff}
+
+  /* Floating text */
+  #float{position:absolute;left:0;top:0;transform:translate(-50%,-50%);display:none;z-index:8;
+         color:#111;font-weight:900;text-shadow:0 1px 0 rgba(255,255,255,.95)}
+</style>
+</head>
+<body>
+  <div id="stage">
+    <canvas id="game" width="480" height="640"></canvas>
+
+    <div id="menu">
+      <div class="group" id="modes">
+        <div class="title">Modes</div>
+        <button class="btn small mode" data-mode="Easy">Easy</button>
+        <button class="btn small mode" data-mode="Medium">Medium</button>
+        <button class="btn small mode" data-mode="Hard">Hard</button>
+        <button class="btn small mode" data-mode="Extreme">Extreme</button>
+      </div>
+      <div class="group" id="shapes">
+        <div class="title">Shapes</div>
+        <button class="btn small shape" data-shape="star">Star</button>
+        <button class="btn small shape" data-shape="triangle">Triangle</button>
+        <button class="btn small shape" data-shape="square">Square</button>
+        <button class="btn small shape" data-shape="cookie">Cookie</button>
+      </div>
+    </div>
+
+    <button id="start" class="btn">Start</button>
+    <div id="hud">Score: <span id="score">0</span> • Best (<span id="bestMode">Easy</span>): <span id="best">0</span></div>
+    <div id="countOverlay"><div id="countText">3</div></div>
+
+    <div id="gameOver">
+      <div class="panel">
+        <h1>Game Over</h1>
+        <div class="scores">
+          Score: <span id="finalScore">0</span><br/>
+          High Score (<span id="finalMode">Easy</span>): <span id="finalBest">0</span>
+        </div>
+        <div class="row">
+          <button id="againBtn" class="btn">Play Again</button>
+          <button id="menuBtn" class="btn">Back to Menu</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="float">Power!</div>
+  </div>
+
+<script>
+const cvs = document.getElementById("game"), ctx = cvs.getContext("2d");
+const W = cvs.width, H = cvs.height;
+
+const MODES = {
+  Easy:    {bg:"var(--easy)",   gravity:0.30, jump:-5.6, pipeSpeed:2.2, gap:180, spacing:260},
+  Medium:  {bg:"var(--medium)", gravity:0.35, jump:-5.6, pipeSpeed:2.8, gap:160, spacing:240},
+  Hard:    {bg:"var(--hard)",   gravity:0.40, jump:-5.4, pipeSpeed:3.4, gap:145, spacing:225},
+  Extreme: {bg:"var(--extreme)",gravity:0.46, jump:-5.2, pipeSpeed:4.0, gap:130, spacing:210}
+};
+
+let mode = "Easy", shape = "star";
+const bestKey = m=>"hs_"+m;
+let bestByMode = {
+  Easy: +(localStorage.getItem(bestKey("Easy"))||0),
+  Medium: +(localStorage.getItem(bestKey("Medium"))||0),
+  Hard: +(localStorage.getItem(bestKey("Hard"))||0),
+  Extreme: +(localStorage.getItem(bestKey("Extreme"))||0),
+};
+
+// Game state
+let player, pipes, score, running=false, gameOver=false;
+let slow=false, slowUntil=0, dbl=false, dblUntil=0, shield=false;
+let invincible=false, invincibleUntil=0;
+
+// Elements
+const menuEl = document.getElementById("menu");
+const startEl = document.getElementById("start");
+const hudEl = document.getElementById("hud");
+const countOverlay = document.getElementById("countOverlay");
+const countText = document.getElementById("countText");
+const gameOverEl = document.getElementById("gameOver");
+const finalScoreEl = document.getElementById("finalScore");
+const finalBestEl = document.getElementById("finalBest");
+const finalModeEl = document.getElementById("finalMode");
+const scoreEl = document.getElementById("score");
+const bestModeEl = document.getElementById("bestMode");
+const bestEl = document.getElementById("best");
+const floatEl = document.getElementById("float");
+let floatTimer=0;
+
+// UI
+function setModeUI(m){
+  document.body.style.background = getComputedStyle(document.documentElement).getPropertyValue("--"+m.toLowerCase());
+  document.querySelectorAll(".mode").forEach(b=>b.classList.toggle("active", b.dataset.mode===m));
+  bestModeEl.textContent = m;
+  bestEl.textContent = bestByMode[m];
+}
+function setShapeUI(s){
+  document.querySelectorAll(".shape").forEach(b=>b.classList.toggle("active", b.dataset.shape===s));
+}
+
+// Shapes
+function drawShape(g, kind, size){
+  if(kind==="cookie"){
+    // cookie base
+    g.fillStyle = "#d9a066";
+    g.beginPath(); g.arc(0,0,size,0,Math.PI*2); g.fill(); g.strokeStyle='#000'; g.lineWidth=2; g.stroke();
+    // chips (5)
+    g.fillStyle = "#6b3e2e";
+    const chips=[{ax:.40,ay:-.20,r:.20},{ax:-.35,ay:0,r:.18},{ax:.10,ay:.35,r:.16},{ax:-.05,ay:-.40,r:.17},{ax:.35,ay:.25,r:.19}];
+    for(const c of chips){ g.beginPath(); g.arc(c.ax*size,c.ay*size,c.r*size,0,Math.PI*2); g.fill(); }
+    return;
+  }
+  g.fillStyle = "limegreen";
+  if(kind==="triangle"){
+    g.beginPath(); g.moveTo(0,-size); g.lineTo(size,size); g.lineTo(-size,size); g.closePath(); g.fill();
+  }else if(kind==="square"){
+    g.fillRect(-size,-size,size*2,size*2);
+  }else{
+    g.beginPath();
+    const outer=size, inner=size*0.45;
+    for(let i=0;i<5;i++){
+      let a = -Math.PI/2 + i*2*Math.PI/5;
+      g.lineTo(Math.cos(a)*outer, Math.sin(a)*outer);
+      a += Math.PI/5;
+      g.lineTo(Math.cos(a)*inner, Math.sin(a)*inner);
+    }
+    g.closePath(); g.fill();
+  }
+}
+
+function resetGame(showMenus){
+  // Player always centered
+  player = {x:W/2,y:H/2,vy:0,size:16};
+  pipes = [];
+  score = 0; gameOver=false; running=false;
+  slow=false; dbl=false; shield=false; slowUntil=0; dblUntil=0;
+  invincible=false; invincibleUntil=0;
+  scoreEl.textContent = score;
+  bestEl.textContent = bestByMode[mode];
+  // keep background tied to mode always
+  document.body.style.background = getComputedStyle(document.documentElement).getPropertyValue("--"+mode.toLowerCase());
+  if(showMenus){
+    menuEl.style.display = "flex";
+    startEl.style.display = "inline-block";
+  }else{
+    menuEl.style.display = "none";
+    startEl.style.display = "none";
+  }
+  gameOverEl.style.display = "none";
+}
+
+// Pipes
+function addPipePair(){
+  const m = MODES[mode];
+  const gap = m.gap;
+  const topH = Math.max(30, Math.min(H-60-gap, Math.floor(Math.random()*(H-120-gap))+40));
+  const bottomY = topH + gap;
+  const width = 60;
+  const x = W + 24;
+
+  // Determine powerup for this pipe (independent 3% each, prioritized color)
+  const rollDouble = Math.random() < 0.03;
+  const rollShield = Math.random() < 0.03;
+  const rollSlow   = Math.random() < 0.03;
+  const rollSuper  = Math.random() < 0.03;
+
+  let pType = "none", color = "#27ae60"; // green default
+  if(rollSuper){ pType="super"; color="#ff80c8"; }          // pink
+  else if(rollShield){ pType="shield"; color="#ffffff"; }   // white
+  else if(rollDouble){ pType="double"; color="#3498db"; }   // blue
+  else if(rollSlow){ pType="slow"; color="#8e44ad"; }       // purple
+
+  pipes.push({x, width, top:topH, bottomY, passed:false, type:pType, color});
+}
+
+function spawnIfNeeded(){
+  const m = MODES[mode];
+  if(pipes.length===0 || (W - (pipes[pipes.length-1].x)) > m.spacing){
+    addPipePair();
+  }
+}
+
+// Countdown
+function showCountdown(seconds, onDone){
+  countOverlay.classList.add("show");
+  countText.textContent = seconds;
+  let t = seconds;
+  const id = setInterval(()=>{
+    t--;
+    if(t>0){ countText.textContent=t; }
+    else{
+      clearInterval(id);
+      countText.textContent="Go!";
+      setTimeout(()=>{ countOverlay.classList.remove("show"); onDone&&onDone(); }, 350);
+    }
+  },1000);
+}
+
+// Powerup activation (called when passing a pipe center)
+function activate(kind){
+  if(kind==="shield"){ shield=true; showFloat("Shield!"); return; }
+  if(kind==="slow"){ slow=true; slowUntil = performance.now()+5000; showFloat("Slow Motion!"); return; }
+  if(kind==="double"){ dbl=true; dblUntil = performance.now()+5000; showFloat("Double Points!"); return; }
+  if(kind==="super"){
+    score = score*2; scoreEl.textContent = score;
+    shield=true; slow=true; dbl=true;
+    slowUntil = performance.now()+5000; dblUntil = performance.now()+5000;
+    showFloat("SUPER!");
+    return;
+  }
+}
+
+function maybeActivateFromPipe(pType){
+  if(pType==="none") return;
+  activate(pType);
+}
+
+// Float text
+function showFloat(msg){
+  floatEl.textContent = msg;
+  floatEl.style.display = "block";
+  floatTimer = 1000; // ms
+  positionFloat(); // position now
+}
+function positionFloat(){
+  const rect = cvs.getBoundingClientRect();
+  if(player){
+    floatEl.style.left = (rect.left + player.x) + "px";
+    floatEl.style.top  = (rect.top  + player.y - 28) + "px";
+  }
+}
+
+// Input
+function flap(){ if(running && !gameOver){ player.vy = MODES[mode].jump; } }
+document.addEventListener("keydown", e=>{ if(e.code==="Space"){ e.preventDefault(); flap(); } });
+cvs.addEventListener("pointerdown", flap);
+
+// UI interactions
+document.querySelectorAll(".mode").forEach(b=>b.addEventListener("click",()=>{
+  mode = b.dataset.mode;
+  setModeUI(mode);
+}));
+document.querySelectorAll(".shape").forEach(b=>b.addEventListener("click",()=>{
+  shape = b.dataset.shape;
+  setShapeUI(shape);
+}));
+document.getElementById("start").addEventListener("click", ()=>{
+  // hide menus & start
+  resetGame(false); // hide menus
+  showCountdown(3, ()=>{ running=true; });
+});
+
+// Draw
+function draw(){
+  ctx.clearRect(0,0,W,H);
+
+  // Pipes
+  for(const p of pipes){
+    ctx.fillStyle = p.color; // colored pipe by powerup
+    ctx.fillRect(p.x,0,p.width,p.top);
+    ctx.fillRect(p.x,p.bottomY,p.width,H-p.bottomY);
+  }
+
+  // Player (always centered x)
+  ctx.save();
+  ctx.translate(player.x, player.y);
+  drawShape(ctx, shape, player.size);
+  // shield aura (blue) when shield is ready
+  if(shield){
+    ctx.strokeStyle = "rgba(52,152,219,0.9)";
+    ctx.lineWidth = 5;
+    ctx.beginPath(); ctx.arc(0,0, player.size+9, 0, Math.PI*2); ctx.stroke();
+  }
+  // invincibility glow (solid white) during phase
+  if(invincible){
+    ctx.strokeStyle = "rgba(255,255,255,1)";
+    ctx.lineWidth = 6;
+    ctx.beginPath(); ctx.arc(0,0, player.size+14, 0, Math.PI*2); ctx.stroke();
+  }
+  ctx.restore();
+
+  requestAnimationFrame(loop);
+}
+
+// Update
+function update(){
+  // run physics even on menu to keep preview centered? We keep y static on menu.
+  if(!running){
+    // keep floating text positioned while visible
+    if(floatTimer>0){
+      floatTimer -= 16;
+      if(floatTimer<=0){ floatEl.style.display="none"; }
+      else positionFloat();
+    }
+    return;
+  }
+  if(gameOver) return;
+
+  // effect expiry
+  const now = performance.now();
+  if(slow && now > slowUntil) slow=false;
+  if(dbl && now > dblUntil) dbl=false;
+  if(invincible && now > invincibleUntil) invincible=false;
+
+  // physics
+  const m = MODES[mode];
+  player.vy += m.gravity;
+  player.y += player.vy;
+
+  // spawn
+  spawnIfNeeded();
+
+  // move pipes
+  for(const p of pipes){
+    const speed = slow ? m.pipeSpeed*0.5 : m.pipeSpeed;
+    p.x -= speed;
+  }
+  // cleanup offscreen
+  while(pipes.length && pipes[0].x + pipes[0].width < 0) pipes.shift();
+
+  // scoring & powerups on pass
+  for(const p of pipes){
+    const center = p.x + p.width/2;
+    if(!p.passed && center < player.x){
+      p.passed = true;
+      // activate pipe's powerup (if any)
+      maybeActivateFromPipe(p.type);
+      // then score (double applies immediately)
+      score += (dbl?2:1);
+      scoreEl.textContent = score;
+    }
+  }
+
+  // collisions
+  for(const p of pipes){
+    const r = player.size*0.9;
+    const overlapX = player.x + r > p.x && player.x - r < p.x + p.width;
+    if(overlapX){
+      const hit = (player.y - r < p.top || player.y + r > p.bottomY);
+      if(hit){
+        if(invincible){
+          // phase through
+        }else if(shield){
+          // consume shield -> pause -> countdown -> 3s invincible
+          shield=false;
+          running=false;
+          showCountdown(3, ()=>{
+            running=true;
+            invincible=true;
+            invincibleUntil = performance.now() + 3000; // solid white glow for 3s
+          });
+          return;
+        }else{
+          return endGame();
+        }
+      }
+    }
+  }
+
+  // bounds
+  if(player.y - player.size < 0 || player.y + player.size > H){
+    if(invincible){
+      // ignore
+    }else if(shield){
+      shield=false;
+      running=false;
+      showCountdown(3, ()=>{
+        running=true;
+        invincible=true;
+        invincibleUntil = performance.now() + 3000;
+        // reposition safely
+        player.y = H/2; player.vy = 0;
+        for(const q of pipes){ if(q.x < W*0.35) q.x = W*0.35; }
+      });
+    }else{
+      return endGame();
+    }
+  }
+
+  // floating text timing
+  if(floatTimer>0){
+    floatTimer -= 16;
+    if(floatTimer<=0){ floatEl.style.display="none"; }
+    else positionFloat();
+  }
+}
+
+function endGame(){
+  running=false; gameOver=true;
+  if(score > bestByMode[mode]){
+    bestByMode[mode] = score;
+    localStorage.setItem(bestKey(mode), String(score));
+  }
+  bestEl.textContent = bestByMode[mode];
+
+  // Show centered Game Over screen (instant)
+  finalScoreEl.textContent = score;
+  finalBestEl.textContent = bestByMode[mode];
+  finalModeEl.textContent = mode;
+  gameOverEl.style.display = "flex";
+}
+
+// Buttons on Game Over screen
+document.getElementById("againBtn").addEventListener("click", ()=>{
+  // restart with same mode and shape; keep menus hidden
+  resetGame(false);
+  showCountdown(3, ()=>{ running=true; });
+});
+document.getElementById("menuBtn").addEventListener("click", ()=>{
+  // return to menu
+  resetGame(true);
+});
+
+// Main loop
+function loop(){ update(); draw(); }
+function init(){
+  setModeUI(mode); setShapeUI(shape);
+  resetGame(true);
+  // keep shape centered at all times
+  player.x = W/2;
+}
+init(); loop();
+</script>
+</body>
+</html>
